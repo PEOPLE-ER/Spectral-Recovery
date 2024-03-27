@@ -3,7 +3,13 @@ import pandas as pd
 
 
 # TODO: allow users to pass attribute col names for date cols
-def read_restoration_polygons(path: str):
+def read_restoration_polygons(
+        path: str,
+        disturbance_start: str | int= None,
+        restoration_start: str | int = None,
+        reference_start: str | int = None,
+        reference_end: str | int = None, 
+    ):
     """Read restoration polygons
 
     A loose wrapper of the geopandas.read_file function. If
@@ -15,9 +21,6 @@ def read_restoration_polygons(path: str):
     ----------
     path : str
         path to restoration polygon vector file
-    ignore_dates : bool, optional
-        flag indicating whether function will
-        check for dates in vector file's attribute table
 
     """
     # Read the vector file and check there is only one polygon
@@ -27,6 +30,29 @@ def read_restoration_polygons(path: str):
             "Only one restoration polygon is currently supported"
             f" ({len(restoration_polygons.index)} provided)"
         )
+
+    if (disturbance_start and not restoration_start) or (not disturbance_start and restoration_start):
+        raise ValueError("Both disturbance_start and restoration_start must be provided. Not one or the other.")
+    
+    if disturbance_start and restoration_start:
+        if not reference_end and not reference_start:
+            dates_no_ref = {
+                "dist_start": disturbance_start,
+                "rest_start": restoration_start,
+            }
+            restoration_polygons = restoration_polygons.assign(**dates_no_ref)
+            # Dates must be in order: dist, rest, ref start, ref end. 
+            restoration_polygons = restoration_polygons[["dist_start", "rest_start", "geometry"]]
+        else:
+            dates_w_ref = {
+                "dist_start": disturbance_start,
+                "rest_start": restoration_start,
+                "ref_start": reference_start,
+                "ref_end": reference_end,
+            }
+            restoration_polygons = restoration_polygons.assign(**dates_w_ref)
+            # Dates must be in order: dist, rest, ref start, ref end. 
+            restoration_polygons = restoration_polygons[["dist_start", "rest_start", "ref_start", "ref_end", "geometry"]]
 
     # Look at the dates within the geodataframe (data from attribute table)
     dates_frame = pd.DataFrame(restoration_polygons.drop(columns="geometry"))
@@ -39,9 +65,9 @@ def read_restoration_polygons(path: str):
     # Check that years are either str or int types
     types = dates_frame.dtypes
     for column_name, data_type in types.items():
-        if data_type != "int64":
+        if data_type != "int64" and data_type != "object" :
             raise ValueError(
-                f"Date fields must be type int (given {data_type} in field"
+                f"Date fields must be type int or str (given {data_type}) in field"
                 f" {column_name})"
             )
     # Check that the dates make sense
@@ -52,9 +78,9 @@ def read_restoration_polygons(path: str):
         )
     if len(dates_frame.columns) > 2:
         try:
-            if dates_frame.iloc[:, 2][0] >= dates_frame.iloc[:, 3][0]:
+            if dates_frame.iloc[:, 2][0] > dates_frame.iloc[:, 3][0]:
                 raise ValueError(
-                    "Reference start year cannot be greater than or equal to the"
+                    "Reference start year cannot be greater than the"
                     f" reference end year ({dates_frame.iloc[:,0][0]} >="
                     f" {dates_frame.iloc[:,0][0]})"
                 )
@@ -67,7 +93,11 @@ def read_restoration_polygons(path: str):
     return restoration_polygons
 
 
-def read_reference_polygons(path: str):
+def read_reference_polygons(
+        path: str,
+        reference_start: str | int = None,
+        reference_end: str | int = None
+    ):
     """Read reference polygons
 
     A loose wrapper of the geopandas.read_file function. If
@@ -85,8 +115,20 @@ def read_reference_polygons(path: str):
 
     """
     reference_polygons = gpd.read_file(path)
+    
+    if reference_start and reference_end:
+        dates = {
+            "ref_start": reference_start,
+            "ref_end": reference_end,
+        }
+        reference_polygons = reference_polygons.assign(**dates)
+        # Dates must be in order: ref start, ref end. 
+        reference_polygons = reference_polygons[["ref_start", "ref_end", "geometry"]]
 
     dates_frame = pd.DataFrame(reference_polygons.drop(columns="geometry"))
+    if (reference_start and not reference_end) or (not reference_start and reference_end):
+        raise ValueError("Both reference_start and reference_end must be provided. Not one or the other.")
+
     types = dates_frame.dtypes
     for column_name, data_type in types.items():
         if data_type != "int64" and data_type != "object":
@@ -99,14 +141,6 @@ def read_reference_polygons(path: str):
             "Attribute table must contain 2 columns with reference start year and"
             f" reference end year ({len(dates_frame.columns)} column(s) given)"
         )
-    types = dates_frame.dtypes
-    for column_name, data_type in types.items():
-        if data_type != "int64":
-            raise ValueError(
-                f"Date fields must be type int (given {data_type} in field"
-                f" {column_name})"
-            )
-
     for column_name in dates_frame.columns:
         unique_values = dates_frame[column_name].nunique()
         if unique_values != 1:
@@ -115,7 +149,7 @@ def read_reference_polygons(path: str):
                 " polygon"
             )
 
-    if (dates_frame.iloc[:, 0] >= dates_frame.iloc[:, 1]).all():
+    if (dates_frame.iloc[:, 0] > dates_frame.iloc[:, 1]).all():
         raise ValueError(
             "Reference start year cannot be greater than reference end year"
             f" ({dates_frame.iloc[:,0][0]} >= {dates_frame.iloc[:,0][0]})"
